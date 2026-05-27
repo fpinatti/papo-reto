@@ -5,6 +5,7 @@ let waStatus = 'disconnected';
 let activeChat = null;
 let statusInterval = null;
 let lastSyncedChats = null;
+let loadedGlobalOnStart = false;
 
 // DOM Elements
 const loginScreen = document.getElementById('loginScreen');
@@ -35,6 +36,18 @@ const tabContentHistory = document.getElementById('tabContentHistory');
 const summaryDisplay = document.getElementById('summaryDisplay');
 const historyDisplay = document.getElementById('historyDisplay');
 
+// Collapsible Sidebar and Global Dashboard Elements
+const sidebar = document.getElementById('sidebar');
+const toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+const dashboardLink = document.getElementById('dashboardLink');
+const dashboardGrid = document.getElementById('dashboardGrid');
+const globalDigestReader = document.getElementById('globalDigestReader');
+const globalDigestsList = document.getElementById('globalDigestsList');
+const closeReaderBtn = document.getElementById('closeReaderBtn');
+const readerTitle = document.getElementById('readerTitle');
+const readerMeta = document.getElementById('readerMeta');
+const readerContent = document.getElementById('readerContent');
+
 // ==========================================
 // INITIALIZATION & STATE POLLING
 // ==========================================
@@ -53,6 +66,11 @@ document.addEventListener('DOMContentLoaded', () => {
   
   tabSummary.addEventListener('click', () => switchTab('summary'));
   tabHistory.addEventListener('click', () => switchTab('history'));
+
+  // Collapsible Sidebar & Dashboard Listeners
+  toggleSidebarBtn.addEventListener('click', toggleSidebar);
+  dashboardLink.addEventListener('click', showDashboard);
+  closeReaderBtn.addEventListener('click', showDashboardList);
 });
 
 /**
@@ -84,10 +102,17 @@ async function checkStatus() {
       if (waStatus === 'ready' && !lastSyncedChats) {
         fetchChats();
       }
+
+      // Load global digests dashboard on start
+      if (!loadedGlobalOnStart) {
+        loadedGlobalOnStart = true;
+        fetchGlobalDigests();
+      }
     } else {
       loginScreen.style.display = 'flex';
       dashboardScreen.style.display = 'none';
       lastSyncedChats = null;
+      loadedGlobalOnStart = false;
     }
   } catch (err) {
     console.error('Error polling status:', err);
@@ -239,22 +264,10 @@ function renderGroups(groups) {
     name.className = 'chat-name';
     name.textContent = group.name;
 
-    const meta = document.createElement('div');
-    meta.className = 'chat-meta';
-    meta.textContent = group.unreadCount > 0 ? `${group.unreadCount} unread` : 'No unread';
-
     info.appendChild(name);
-    info.appendChild(meta);
 
     item.appendChild(avatar);
     item.appendChild(info);
-
-    if (group.unreadCount > 0) {
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = group.unreadCount;
-      item.appendChild(badge);
-    }
 
     item.addEventListener('click', () => selectGroup(group));
     groupsList.appendChild(item);
@@ -265,6 +278,7 @@ function selectGroup(group) {
   activeChat = group;
   
   // Highlight active sidebar item
+  dashboardLink.classList.remove('active');
   const items = groupsList.querySelectorAll('.chat-item');
   items.forEach(el => {
     const nameEl = el.querySelector('.chat-name');
@@ -520,5 +534,167 @@ function renderMarkdown(markdown, targetElement) {
     rawText.style.whiteSpace = 'pre-wrap';
     rawText.textContent = markdown;
     targetElement.appendChild(rawText);
+  }
+}
+
+// ==========================================
+// COLLAPSIBLE SIDEBAR & DASHBOARD HANDLERS
+// ==========================================
+
+function toggleSidebar() {
+  sidebar.classList.toggle('collapsed');
+  if (sidebar.classList.contains('collapsed')) {
+    toggleSidebarBtn.textContent = '▶';
+  } else {
+    toggleSidebarBtn.textContent = '◀';
+  }
+}
+
+async function showDashboard() {
+  activeChat = null;
+  welcomeScreen.style.display = 'flex';
+  activeDashboard.style.display = 'none';
+  
+  // Highlight Dashboard link, unhighlight chats
+  dashboardLink.classList.add('active');
+  const items = groupsList.querySelectorAll('.chat-item');
+  items.forEach(el => el.classList.remove('active'));
+  
+  // Hide Reader, show Grid
+  dashboardGrid.style.display = 'block';
+  globalDigestReader.style.display = 'none';
+  
+  // Fetch and display all past digests
+  fetchGlobalDigests();
+}
+
+function showDashboardList() {
+  dashboardGrid.style.display = 'block';
+  globalDigestReader.style.display = 'none';
+}
+
+async function fetchGlobalDigests() {
+  try {
+    globalDigestsList.replaceChildren();
+    
+    // Show a loading text or placeholder
+    const loadingText = document.createElement('p');
+    loadingText.className = 'logo-sub';
+    loadingText.textContent = 'Loading past digests...';
+    globalDigestsList.appendChild(loadingText);
+
+    const res = await fetch('/api/summaries'); // No chatId query parameter fetches all
+    if (!res.ok) throw new Error('Failed to fetch summaries');
+    
+    const data = await res.json();
+    globalDigestsList.replaceChildren();
+    
+    if (data.success && data.summaries) {
+      renderGlobalDigests(data.summaries);
+    }
+  } catch (err) {
+    console.error('Error fetching global digests:', err);
+    globalDigestsList.replaceChildren();
+    const errorText = document.createElement('p');
+    errorText.className = 'error-message';
+    errorText.style.display = 'block';
+    errorText.textContent = 'Failed to load past digests.';
+    globalDigestsList.appendChild(errorText);
+  }
+}
+
+function renderGlobalDigests(summaries) {
+  if (summaries.length === 0) {
+    const emptyMsg = document.createElement('p');
+    emptyMsg.className = 'logo-sub';
+    emptyMsg.textContent = 'No past digests found. Choose a WhatsApp group to generate your first digest!';
+    globalDigestsList.appendChild(emptyMsg);
+    return;
+  }
+
+  summaries.forEach(sum => {
+    const card = document.createElement('div');
+    card.className = 'global-digest-card';
+    
+    const meta = document.createElement('div');
+    meta.className = 'global-digest-meta';
+
+    // Format group name
+    const groupName = document.createElement('div');
+    groupName.className = 'global-digest-group';
+    groupName.textContent = sum.chat_name;
+
+    // Format generated date
+    const date = new Date(sum.created_at * 1000).toLocaleString();
+    const dateTitle = document.createElement('div');
+    dateTitle.className = 'global-digest-date';
+    dateTitle.textContent = `Digest from ${date}`;
+
+    // Format range dates
+    const startStr = new Date(sum.start_timestamp * 1000).toLocaleDateString();
+    const endStr = new Date(sum.end_timestamp * 1000).toLocaleDateString();
+    const rangeSub = document.createElement('div');
+    rangeSub.className = 'global-digest-timeframe';
+    rangeSub.textContent = `Timeframe: ${startStr} to ${endStr}`;
+
+    meta.appendChild(groupName);
+    meta.appendChild(dateTitle);
+    meta.appendChild(rangeSub);
+
+    const actionText = document.createElement('span');
+    actionText.className = 'badge';
+    actionText.textContent = 'Read';
+
+    card.appendChild(meta);
+    card.appendChild(actionText);
+
+    card.addEventListener('click', () => loadGlobalDigestDetails(sum.id));
+    globalDigestsList.appendChild(card);
+  });
+}
+
+async function loadGlobalDigestDetails(summaryId) {
+  // Hide grid, show reader with shimmer loading
+  dashboardGrid.style.display = 'none';
+  globalDigestReader.style.display = 'block';
+  
+  readerTitle.textContent = 'Loading digest...';
+  readerMeta.textContent = '';
+  
+  readerContent.replaceChildren();
+  const wrapper = document.createElement('div');
+  wrapper.className = 'shimmer-wrapper';
+  const lines = ['header', 'p1', 'p2', 'p3', 'p1', 'p2', 'p4'];
+  lines.forEach(type => {
+    const line = document.createElement('div');
+    line.className = `shimmer-line ${type}`;
+    wrapper.appendChild(line);
+  });
+  readerContent.appendChild(wrapper);
+
+  try {
+    const res = await fetch(`/api/summaries/${summaryId}`);
+    if (!res.ok) throw new Error('Failed to fetch summary details');
+
+    const data = await res.json();
+    if (data.success && data.summary) {
+      readerTitle.textContent = `${data.summary.chat_name} Digest`;
+      const date = new Date(data.summary.created_at * 1000).toLocaleString();
+      const startStr = new Date(data.summary.start_timestamp * 1000).toLocaleDateString();
+      const endStr = new Date(data.summary.end_timestamp * 1000).toLocaleDateString();
+      readerMeta.textContent = `Generated on ${date} • Timeframe: ${startStr} to ${endStr}`;
+      
+      renderMarkdown(data.summary.summary_markdown, readerContent);
+    }
+  } catch (err) {
+    console.error('Error fetching global summary details:', err);
+    readerTitle.textContent = 'Error';
+    readerMeta.textContent = '';
+    readerContent.replaceChildren();
+    const errMsg = document.createElement('p');
+    errMsg.className = 'error-message';
+    errMsg.style.display = 'block';
+    errMsg.textContent = 'Could not load digest details.';
+    readerContent.appendChild(errMsg);
   }
 }

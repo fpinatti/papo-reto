@@ -159,10 +159,16 @@ async function saveSummary(chatId, chatName, summaryMarkdown, startTimestamp, en
 async function getSummaries(chatId) {
   if (!db) await initDatabase();
 
-  return db.all(
-    `SELECT * FROM summaries WHERE chat_id = ? ORDER BY created_at DESC`,
-    [chatId]
-  );
+  if (chatId) {
+    return db.all(
+      `SELECT * FROM summaries WHERE chat_id = ? ORDER BY created_at DESC`,
+      [chatId]
+    );
+  } else {
+    return db.all(
+      `SELECT * FROM summaries ORDER BY created_at DESC`
+    );
+  }
 }
 
 /**

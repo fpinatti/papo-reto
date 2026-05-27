@@ -405,10 +405,6 @@ app.post('/api/summarize', requireAuth, async (req, res) => {
 app.get('/api/summaries', requireAuth, async (req, res) => {
   const { chatId } = req.query;
 
-  if (!chatId) {
-    return res.status(400).json({ error: 'chatId parameter is required' });
-  }
-
   try {
     const summaries = await db.getSummaries(chatId);
     res.json({ success: true, summaries });
