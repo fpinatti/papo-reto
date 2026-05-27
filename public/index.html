@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Papo Reto - Direct WhatsApp AI Digests</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Glassmorphic Container -->
+  <div class="glass-container">
+
+    <!-- 1. LOGIN SCREEN -->
+    <div id="loginScreen" class="login-view">
+      <div class="login-card">
+        <div class="logo-container">
+          <h1 class="logo-text">💬 Papo Reto</h1>
+          <div class="logo-sub">Short, Direct & Sincere AI Digests</div>
+        </div>
+        <form id="loginForm" autocomplete="off">
+          <div class="form-group">
+            <label for="appPassword" class="form-label">Access Password</label>
+            <input type="password" id="appPassword" class="form-input" placeholder="••••••••" required>
+          </div>
+          <button type="submit" class="btn-primary">Authenticate</button>
+          <div id="loginError" class="error-message"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 2. DASHBOARD VIEW (Hidden until Login) -->
+    <div id="dashboardScreen" class="dashboard-view" style="display: none;">
+      
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h2 class="sidebar-logo font-outfit">💬 Papo Reto</h2>
+          
+          <!-- Connection Status -->
+          <div class="status-widget">
+            <span class="status-label">WhatsApp Status:</span>
+            <span class="status-indicator">
+              <span id="connectionDot" class="status-dot disconnected"></span>
+              <span id="connectionText">Disconnected</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Chats List Section -->
+        <div class="chats-list-container">
+          <h3 class="section-title">WhatsApp Groups</h3>
+          <div id="groupsList">
+            <!-- Dynamically populated via JavaScript -->
+          </div>
+        </div>
+
+        <!-- Sidebar Footer -->
+        <div class="sidebar-footer">
+          <button id="logoutBtn" class="btn-secondary">
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Display Panel -->
+      <main class="main-panel">
+        
+        <!-- QR Code Scan Overlay (Displays when connection is required) -->
+        <div id="qrOverlay" class="qr-overlay" style="display: none;">
+          <h2 class="welcome-title">Link your WhatsApp</h2>
+          <p class="logo-sub">Scan this QR code using WhatsApp on your phone to link your account.</p>
+          <div class="qr-box">
+            <img id="qrImage" src="" alt="WhatsApp Web QR Code">
+          </div>
+          <p class="logo-sub">Settings > Linked Devices > Link a Device</p>
+        </div>
+
+        <!-- Welcome / Idle Panel -->
+        <div id="welcomeScreen" class="welcome-screen">
+          <div class="welcome-icon">💬</div>
+          <h2 class="welcome-title">Select a Group</h2>
+          <p class="logo-sub">Choose a WhatsApp group from the sidebar to generate a direct, straightforward "Papo Reto" digest.</p>
+        </div>
+
+        <!-- Active Dashboard Dashboard -->
+        <div id="activeDashboard" class="active-dashboard">
+          
+          <!-- Header (Active Group and Controls) -->
+          <div class="dashboard-header">
+            <h2 id="activeChatTitle" class="active-chat-title">Group Name</h2>
+            
+            <div class="control-bar">
+              <select id="timeRangeSelect" class="time-select">
+                <option value="1">Last 24 Hours</option>
+                <option value="3">Last 3 Days</option>
+                <option value="7">Last 7 Days</option>
+              </select>
+              <button id="summarizeBtn" class="btn-action">
+                <span>Generate Digest</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Navigation Tabs -->
+          <div class="tab-navigation">
+            <button id="tabSummary" class="tab-btn active">New Digest</button>
+            <button id="tabHistory" class="tab-btn">Past Digests</button>
+          </div>
+
+          <!-- Dashboard Dynamic Content -->
+          <div class="dashboard-content">
+            
+            <!-- Summary Tab Content -->
+            <div id="tabContentSummary" class="tab-content active">
+              <div id="summaryDisplay" class="summary-container">
+                <p class="logo-sub">Click "Generate Digest" to sync messages and build a direct, straightforward outcome summary.</p>
+              </div>
+            </div>
+
+            <!-- History Tab Content -->
+            <div id="tabContentHistory" class="tab-content">
+              <div id="historyDisplay" class="history-list">
+                <!-- Dynamically populated via JavaScript -->
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </main>
+
+    </div>
+
+  </div>
+
+  <!-- Load Secure JS Libs locally (Strict CSP compliant) -->
+  <script src="/libs/dompurify/purify.min.js"></script>
+  <script src="/libs/marked/marked.min.js"></script>
+  
+  <!-- Main Application Script -->
+  <script src="app.js"></script>
+</body>
+</html>
