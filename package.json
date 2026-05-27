@@ -17,6 +17,7 @@
     "qrcode": "^1.5.3",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
+    "telegram": "^2.22.2",
     "whatsapp-web.js": "^1.25.0"
   },
   "engines": {

@@ -9,6 +9,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 
 const db = require('./database');
 const gemini = require('./gemini');
+const telegram = require('./telegram');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -218,15 +219,21 @@ app.post('/api/logout', requireAuth, (req, res) => {
 });
 
 // Status Endpoint (fetches connection status and CSRF token)
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
   // Ensure session has a CSRF token (even if not authenticated yet)
   if (!req.session.csrfToken) {
     req.session.csrfToken = crypto.randomBytes(32).toString('hex');
   }
 
+  let tgClientStatus = 'disconnected';
+  if (req.session && req.session.authenticated) {
+    tgClientStatus = await telegram.getTelegramStatus();
+  }
+
   const responseData = {
     isAuthenticated: !!(req.session && req.session.authenticated),
     whatsappStatus: waClientStatus,
+    telegramStatus: tgClientStatus,
     csrfToken: req.session.csrfToken
   };
 
@@ -239,25 +246,87 @@ app.get('/api/status', (req, res) => {
 
 // Get Groups/Chats Endpoint
 app.get('/api/chats', requireAuth, async (req, res) => {
-  if (waClientStatus !== 'ready') {
-    return res.status(503).json({ error: 'WhatsApp client is not ready. Status: ' + waClientStatus });
+  const platform = req.query.platform || 'whatsapp';
+
+  if (platform === 'whatsapp') {
+    if (waClientStatus !== 'ready') {
+      return res.status(503).json({ error: 'WhatsApp client is not ready. Status: ' + waClientStatus });
+    }
+
+    try {
+      console.log('Fetching chats from WhatsApp Web...');
+      const chats = await waClient.getChats();
+      const groups = chats
+        .filter(c => c.isGroup)
+        .map(c => ({
+          id: c.id._serialized,
+          name: c.name || 'Unnamed Group'
+        }));
+
+      res.json({ success: true, groups });
+    } catch (error) {
+      console.error('Error fetching chats:', error);
+      res.status(500).json({ error: 'Failed to fetch chats from WhatsApp' });
+    }
+  } else if (platform === 'telegram') {
+    try {
+      console.log('Fetching discovered Telegram groups...');
+      const groups = await telegram.getTelegramChats();
+      res.json({ success: true, groups });
+    } catch (error) {
+      console.error('Error fetching Telegram chats:', error);
+      res.status(500).json({ error: 'Failed to fetch Telegram groups: ' + error.message });
+    }
+  } else {
+    res.status(400).json({ error: 'Invalid platform parameter' });
+  }
+});
+
+// Telegram MTProto Connect Endpoint
+app.post('/api/telegram/connect', requireAuth, async (req, res) => {
+  const { apiId, apiHash, phoneNumber } = req.body;
+
+  if (!apiId || !apiHash || !phoneNumber) {
+    return res.status(400).json({ error: 'apiId, apiHash and phoneNumber are required' });
   }
 
   try {
-    console.log('Fetching chats from WhatsApp Web...');
-    const chats = await waClient.getChats();
-    const groups = chats
-      .filter(c => c.isGroup)
-      .map(c => ({
-        id: c.id._serialized,
-        name: c.name || 'Unnamed Group',
-        unreadCount: c.unreadCount || 0
-      }));
-
-    res.json({ success: true, groups });
+    console.log(`Telegram login: Sending OTP verification code to ${phoneNumber}...`);
+    const phoneCodeHash = await telegram.sendCode(apiId, apiHash, phoneNumber);
+    req.session.tgPhoneCodeHash = phoneCodeHash;
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error fetching chats:', error);
-    res.status(500).json({ error: 'Failed to fetch chats from WhatsApp' });
+    console.error('Error starting Telegram connection:', error);
+    res.status(500).json({ error: 'Failed to send Telegram code: ' + error.message });
+  }
+});
+
+// Telegram MTProto Verify Code Endpoint
+app.post('/api/telegram/verify', requireAuth, async (req, res) => {
+  const { phoneCode, password } = req.body;
+  const phoneCodeHash = req.session.tgPhoneCodeHash;
+
+  if (!phoneCode) {
+    return res.status(400).json({ error: 'phoneCode is required' });
+  }
+  if (!phoneCodeHash) {
+    return res.status(400).json({ error: 'Verification session expired. Please request the code again.' });
+  }
+
+  try {
+    console.log(`Telegram login: Verifying login code...`);
+    const result = await telegram.signIn(phoneCode, password, phoneCodeHash);
+    
+    if (result.success) {
+      delete req.session.tgPhoneCodeHash;
+      console.log('Telegram Login: Success!');
+      res.json({ success: true });
+    } else if (result.requiresPassword) {
+      res.json({ success: false, requiresPassword: true });
+    }
+  } catch (error) {
+    console.error('Error verifying Telegram code:', error);
+    res.status(500).json({ error: 'Verification failed: ' + error.message });
   }
 });
 
@@ -321,7 +390,7 @@ app.post('/api/sync', requireAuth, async (req, res) => {
 
 // Summarize Endpoint (Syncs, then generates and saves a summary)
 app.post('/api/summarize', requireAuth, async (req, res) => {
-  const { chatId, chatName, days = 1 } = req.body;
+  const { chatId, chatName, days = 1, platform = 'whatsapp' } = req.body;
 
   if (!chatId || !chatName) {
     return res.status(400).json({ error: 'chatId and chatName are required' });
@@ -329,39 +398,49 @@ app.post('/api/summarize', requireAuth, async (req, res) => {
 
   try {
     // 1. Trigger synchronization to get the latest messages
-    if (waClientStatus === 'ready') {
-      console.log(`Auto-syncing chat ${chatName} before summarization...`);
-      try {
-        const chat = await waClient.getChatById(chatId);
-        const msgs = await chat.fetchMessages({ limit: 1000 });
-        const cutoffTime = Math.floor(Date.now() / 1000) - (parseInt(days) * 24 * 60 * 60);
-        const filteredMsgs = msgs.filter(m => m.timestamp >= cutoffTime && m.body && m.body.trim().length > 0);
+    if (platform === 'whatsapp') {
+      if (waClientStatus === 'ready') {
+        console.log(`Auto-syncing chat ${chatName} before summarization...`);
+        try {
+          const chat = await waClient.getChatById(chatId);
+          const msgs = await chat.fetchMessages({ limit: 1000 });
+          const cutoffTime = Math.floor(Date.now() / 1000) - (parseInt(days) * 24 * 60 * 60);
+          const filteredMsgs = msgs.filter(m => m.timestamp >= cutoffTime && m.body && m.body.trim().length > 0);
 
-        const formattedMsgs = await Promise.all(
-          filteredMsgs.map(async (m) => {
-            let senderName = 'Unknown';
-            try {
-              const contact = await m.getContact();
-              senderName = contact.pushname || contact.name || 'Unknown';
-            } catch (err) {
-              senderName = m.author || m.from || 'Unknown';
-            }
-            return {
-              id: m.id.id,
-              chatId: chatId,
-              senderId: m.author || m.from,
-              senderName: senderName,
-              timestamp: m.timestamp,
-              body: m.body
-            };
-          })
-        );
-        await db.saveMessages(formattedMsgs);
-      } catch (syncError) {
-        console.warn('Silent sync error before summary (will proceed with existing DB messages):', syncError);
+          const formattedMsgs = await Promise.all(
+            filteredMsgs.map(async (m) => {
+              let senderName = 'Unknown';
+              try {
+                const contact = await m.getContact();
+                senderName = contact.pushname || contact.name || 'Unknown';
+              } catch (err) {
+                senderName = m.author || m.from || 'Unknown';
+              }
+              return {
+                id: m.id.id,
+                chatId: chatId,
+                senderId: m.author || m.from,
+                senderName: senderName,
+                timestamp: m.timestamp,
+                body: m.body,
+                platform: 'whatsapp'
+              };
+            })
+          );
+          await db.saveMessages(formattedMsgs);
+        } catch (syncError) {
+          console.warn('Silent sync error before summary (will proceed with existing DB messages):', syncError);
+        }
+      } else {
+        console.warn('WhatsApp client is not ready. Proceeding with database-cached messages only.');
       }
-    } else {
-      console.warn('WhatsApp client is not ready. Proceeding with database-cached messages only.');
+    } else if (platform === 'telegram') {
+      console.log(`Auto-syncing Telegram chat ${chatName} before digest...`);
+      try {
+        await telegram.syncTelegramMessages(chatId, days);
+      } catch (syncError) {
+        console.warn('Silent sync error before Telegram summary (will proceed with existing DB messages):', syncError);
+      }
     }
 
     // 2. Fetch unsummarized messages from DB
@@ -382,7 +461,7 @@ app.post('/api/summarize', requireAuth, async (req, res) => {
     const summaryMarkdown = await gemini.generateGroupSummary(chatName, unsummarizedMessages);
 
     // 4. Save summary to DB
-    const summaryId = await db.saveSummary(chatId, chatName, summaryMarkdown, cutoffTimestamp, nowTimestamp);
+    const summaryId = await db.saveSummary(chatId, chatName, summaryMarkdown, cutoffTimestamp, nowTimestamp, platform);
 
     // 5. Mark messages as summarized
     const messageIds = unsummarizedMessages.map(m => m.id);
@@ -438,6 +517,9 @@ db.initDatabase()
       console.log(`Server is running at http://${host}:${port}`);
       console.log(`Security Notice: Listening on local interface only (127.0.0.1)`);
       console.log(`========================================================================\n`);
+      
+      // Start Telegram Bot background updates polling service
+      telegram.startTelegramPolling();
     });
   })
   .catch((err) => {

@@ -35,7 +35,8 @@ async function initDatabase() {
       sender_name TEXT,
       timestamp INTEGER NOT NULL,
       body TEXT,
-      is_summarized INTEGER DEFAULT 0
+      is_summarized INTEGER DEFAULT 0,
+      platform TEXT DEFAULT 'whatsapp'
     );
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
   `);
@@ -49,10 +50,42 @@ async function initDatabase() {
       summary_markdown TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       start_timestamp INTEGER NOT NULL,
-      end_timestamp INTEGER NOT NULL
+      end_timestamp INTEGER NOT NULL,
+      platform TEXT DEFAULT 'whatsapp'
     );
     CREATE INDEX IF NOT EXISTS idx_summaries_chat_created ON summaries(chat_id, created_at);
   `);
+
+  // Create telegram_chats table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_chats (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+  `);
+
+  // Create telegram_config table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  // Schema Migrations (Add platform column to existing messages & summaries tables if missing)
+  const messagesInfo = await db.all("PRAGMA table_info(messages);");
+  const hasPlatformInMessages = messagesInfo.some(col => col.name === 'platform');
+  if (!hasPlatformInMessages) {
+    console.log("Migrating database: adding platform column to messages table...");
+    await db.exec("ALTER TABLE messages ADD COLUMN platform TEXT DEFAULT 'whatsapp';");
+  }
+
+  const summariesInfo = await db.all("PRAGMA table_info(summaries);");
+  const hasPlatformInSummaries = summariesInfo.some(col => col.name === 'platform');
+  if (!hasPlatformInSummaries) {
+    console.log("Migrating database: adding platform column to summaries table...");
+    await db.exec("ALTER TABLE summaries ADD COLUMN platform TEXT DEFAULT 'whatsapp';");
+  }
 
   console.log('Database initialized successfully at', dbPath);
   return db;
@@ -67,8 +100,8 @@ async function saveMessages(messages) {
   if (!db) await initDatabase();
 
   const stmt = await db.prepare(`
-    INSERT OR IGNORE INTO messages (id, chat_id, sender_id, sender_name, timestamp, body, is_summarized)
-    VALUES (?, ?, ?, ?, ?, ?, 0)
+    INSERT OR IGNORE INTO messages (id, chat_id, sender_id, sender_name, timestamp, body, is_summarized, platform)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
   `);
 
   try {
@@ -80,7 +113,8 @@ async function saveMessages(messages) {
         msg.senderId,
         msg.senderName,
         msg.timestamp,
-        msg.body
+        msg.body,
+        msg.platform || 'whatsapp'
       ]);
     }
   } finally {
@@ -137,15 +171,15 @@ async function markMessagesAsSummarized(messageIds) {
  * @param {number} startTimestamp Timestamp of first message
  * @param {number} endTimestamp Timestamp of last message
  */
-async function saveSummary(chatId, chatName, summaryMarkdown, startTimestamp, endTimestamp) {
+async function saveSummary(chatId, chatName, summaryMarkdown, startTimestamp, endTimestamp, platform = 'whatsapp') {
   if (!db) await initDatabase();
 
   const now = Math.floor(Date.now() / 1000);
   
   const result = await db.run(
-    `INSERT INTO summaries (chat_id, chat_name, summary_markdown, created_at, start_timestamp, end_timestamp)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [chatId, chatName, summaryMarkdown, now, startTimestamp, endTimestamp]
+    `INSERT INTO summaries (chat_id, chat_name, summary_markdown, created_at, start_timestamp, end_timestamp, platform)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [chatId, chatName, summaryMarkdown, now, startTimestamp, endTimestamp, platform]
   );
 
   return result.lastID;
@@ -189,5 +223,48 @@ module.exports = {
   markMessagesAsSummarized,
   saveSummary,
   getSummaries,
-  getSummaryById
+  getSummaryById,
+  saveTelegramChat,
+  getTelegramChats,
+  saveTelegramConfig,
+  getTelegramConfig
 };
+
+/**
+ * Saves or updates a Telegram chat reference.
+ */
+async function saveTelegramChat(id, name) {
+  if (!db) await initDatabase();
+  await db.run(
+    `INSERT OR REPLACE INTO telegram_chats (id, name) VALUES (?, ?)`,
+    [id, name]
+  );
+}
+
+/**
+ * Retrieves all saved Telegram chats.
+ */
+async function getTelegramChats() {
+  if (!db) await initDatabase();
+  return db.all(`SELECT id, name FROM telegram_chats ORDER BY name ASC`);
+}
+
+/**
+ * Saves a Telegram configuration setting.
+ */
+async function saveTelegramConfig(key, value) {
+  if (!db) await initDatabase();
+  await db.run(
+    `INSERT OR REPLACE INTO telegram_config (key, value) VALUES (?, ?)`,
+    [key, value]
+  );
+}
+
+/**
+ * Retrieves a Telegram configuration setting.
+ */
+async function getTelegramConfig(key) {
+  if (!db) await initDatabase();
+  const row = await db.get(`SELECT value FROM telegram_config WHERE key = ?`, [key]);
+  return row ? row.value : null;
+}

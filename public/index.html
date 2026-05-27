@@ -42,11 +42,20 @@
           
           <!-- Connection Status -->
           <div class="status-widget">
-            <span class="status-label">WhatsApp Status:</span>
-            <span class="status-indicator">
-              <span id="connectionDot" class="status-dot disconnected"></span>
-              <span id="connectionText">Disconnected</span>
-            </span>
+            <div class="status-row">
+              <span class="status-label">WA:</span>
+              <span class="status-indicator">
+                <span id="connectionDot" class="status-dot disconnected"></span>
+                <span id="connectionText">Disconnected</span>
+              </span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">TG:</span>
+              <span class="status-indicator">
+                <span id="tgConnectionDot" class="status-dot disconnected"></span>
+                <span id="tgConnectionText">Disconnected</span>
+              </span>
+            </div>
           </div>
         </div>
 
@@ -59,7 +68,13 @@
               <div class="chat-meta">All Past Digests</div>
             </div>
           </div>
-          <h3 class="section-title" style="margin-top: 1.25rem;">WhatsApp Groups</h3>
+
+          <div class="platform-tabs">
+            <button id="btnPlatformWA" class="platform-tab active">💬 WhatsApp</button>
+            <button id="btnPlatformTG" class="platform-tab">✈️ Telegram</button>
+          </div>
+
+          <h3 id="chatsSectionTitle" class="section-title">WhatsApp Groups</h3>
           <div id="groupsList">
             <!-- Dynamically populated via JavaScript -->
           </div>
@@ -84,6 +99,53 @@
             <img id="qrImage" src="" alt="WhatsApp Web QR Code">
           </div>
           <p class="logo-sub">Settings > Linked Devices > Link a Device</p>
+        </div>
+
+        <!-- Telegram Connect Overlay (Displays when Telegram connection is required) -->
+        <div id="tgOverlay" class="qr-overlay" style="display: none;">
+          <h2 class="welcome-title">Link your Telegram</h2>
+          <p class="logo-sub" style="margin-bottom: 2rem;">Enter your Telegram API ID, API Hash (from my.telegram.org) and Phone Number to link your account.</p>
+          
+          <div class="login-card" style="background: transparent; border: none; box-shadow: none; padding: 0; width: 100%; max-width: 380px; backdrop-filter: none;">
+            
+            <!-- Step 1: Request code -->
+            <form id="tgRequestCodeForm" style="display: block;">
+              <div class="form-group">
+                <label for="tgApiId" class="form-label">API ID</label>
+                <input type="text" id="tgApiId" class="form-input" placeholder="e.g. 1234567" required autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label for="tgApiHash" class="form-label">API Hash</label>
+                <input type="text" id="tgApiHash" class="form-input" placeholder="e.g. 0123456789abcdef0123456789abcdef" required autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label for="tgPhone" class="form-label">Phone Number (with Country Code)</label>
+                <input type="text" id="tgPhone" class="form-input" placeholder="e.g. +5511999999999" required autocomplete="off">
+              </div>
+              <button type="submit" id="tgRequestCodeBtn" class="btn-primary">Request Code</button>
+              <div id="tgRequestError" class="error-message"></div>
+            </form>
+
+            <!-- Step 2: Verification Code & 2FA (hidden initially) -->
+            <form id="tgVerifyCodeForm" style="display: none;">
+              <div class="form-group">
+                <label for="tgCode" class="form-label">Telegram Verification Code</label>
+                <input type="text" id="tgCode" class="form-input" placeholder="e.g. 12345" required autocomplete="off">
+                <p class="logo-sub" style="font-size: 0.75rem; margin-top: 0.25rem;">Enter the login code sent to your Telegram app.</p>
+              </div>
+              <div id="tgPasswordGroup" class="form-group" style="display: none;">
+                <label for="tgPassword" class="form-label">2FA Password (optional)</label>
+                <input type="password" id="tgPassword" class="form-input" placeholder="••••••••" autocomplete="off">
+                <p class="logo-sub" style="font-size: 0.75rem; margin-top: 0.25rem;">Required only if Two-Step Verification is enabled.</p>
+              </div>
+              <button type="submit" id="tgVerifyCodeBtn" class="btn-primary">Link Telegram</button>
+              <div id="tgVerifyError" class="error-message"></div>
+              <button type="button" id="tgBackToConnectBtn" class="btn-secondary" style="margin-top: 1rem; width: 100%;">
+                <span>Change Credentials</span>
+              </button>
+            </form>
+
+          </div>
         </div>
 
         <!-- Welcome / Idle Panel (Dashboard & Reader) -->

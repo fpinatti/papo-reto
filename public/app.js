@@ -2,10 +2,14 @@
 let csrfToken = null;
 let isAuthenticated = false;
 let waStatus = 'disconnected';
+let tgStatus = 'disconnected';
 let activeChat = null;
 let statusInterval = null;
 let lastSyncedChats = null;
 let loadedGlobalOnStart = false;
+let currentPlatform = 'whatsapp';
+let loadedTgChatsOnStart = false;
+let tgVerifyStep = false;
 
 // DOM Elements
 const loginScreen = document.getElementById('loginScreen');
@@ -48,6 +52,29 @@ const readerTitle = document.getElementById('readerTitle');
 const readerMeta = document.getElementById('readerMeta');
 const readerContent = document.getElementById('readerContent');
 
+// Telegram UI Elements
+const tgConnectionDot = document.getElementById('tgConnectionDot');
+const tgConnectionText = document.getElementById('tgConnectionText');
+const btnPlatformWA = document.getElementById('btnPlatformWA');
+const btnPlatformTG = document.getElementById('btnPlatformTG');
+const chatsSectionTitle = document.getElementById('chatsSectionTitle');
+
+// Telegram Connect Overlay Elements
+const tgOverlay = document.getElementById('tgOverlay');
+const tgRequestCodeForm = document.getElementById('tgRequestCodeForm');
+const tgApiIdInput = document.getElementById('tgApiId');
+const tgApiHashInput = document.getElementById('tgApiHash');
+const tgPhoneInput = document.getElementById('tgPhone');
+const tgRequestCodeBtn = document.getElementById('tgRequestCodeBtn');
+const tgRequestError = document.getElementById('tgRequestError');
+const tgVerifyCodeForm = document.getElementById('tgVerifyCodeForm');
+const tgCodeInput = document.getElementById('tgCode');
+const tgPasswordInput = document.getElementById('tgPassword');
+const tgPasswordGroup = document.getElementById('tgPasswordGroup');
+const tgVerifyCodeBtn = document.getElementById('tgVerifyCodeBtn');
+const tgVerifyError = document.getElementById('tgVerifyError');
+const tgBackToConnectBtn = document.getElementById('tgBackToConnectBtn');
+
 // ==========================================
 // INITIALIZATION & STATE POLLING
 // ==========================================
@@ -71,6 +98,15 @@ document.addEventListener('DOMContentLoaded', () => {
   toggleSidebarBtn.addEventListener('click', toggleSidebar);
   dashboardLink.addEventListener('click', showDashboard);
   closeReaderBtn.addEventListener('click', showDashboardList);
+
+  // Platform Selector Listeners
+  btnPlatformWA.addEventListener('click', () => switchPlatform('whatsapp'));
+  btnPlatformTG.addEventListener('click', () => switchPlatform('telegram'));
+
+  // Telegram Connect Listeners
+  tgRequestCodeForm.addEventListener('submit', handleTgRequestCode);
+  tgVerifyCodeForm.addEventListener('submit', handleTgVerifyCode);
+  tgBackToConnectBtn.addEventListener('click', handleTgBackToConnect);
 });
 
 /**
@@ -85,6 +121,7 @@ async function checkStatus() {
     
     isAuthenticated = data.isAuthenticated;
     waStatus = data.whatsappStatus;
+    tgStatus = data.telegramStatus || 'disconnected';
     
     if (data.csrfToken) {
       csrfToken = data.csrfToken;
@@ -98,8 +135,17 @@ async function checkStatus() {
       // Update WhatsApp connection UI
       updateWhatsAppUI(data);
       
+      // Update Telegram connection UI
+      updateTelegramUI(data);
+      
       // If WhatsApp is ready and we haven't loaded chats yet, load them
-      if (waStatus === 'ready' && !lastSyncedChats) {
+      if (waStatus === 'ready' && !lastSyncedChats && currentPlatform === 'whatsapp') {
+        fetchChats();
+      }
+
+      // If Telegram is ready and we haven't loaded chats yet, load them
+      if (tgStatus === 'ready' && !loadedTgChatsOnStart && currentPlatform === 'telegram') {
+        loadedTgChatsOnStart = true;
         fetchChats();
       }
 
@@ -137,20 +183,25 @@ function updateWhatsAppUI(data) {
   
   connectionText.textContent = statusLabels[waStatus] || 'Unknown';
 
-  // 2. Manage QR Overlay
-  if (waStatus === 'qr_ready' && data.qrCode) {
-    qrOverlay.style.display = 'flex';
-    qrImage.src = data.qrCode;
-  } else if (waStatus === 'connecting') {
-    qrOverlay.style.display = 'flex';
-    qrImage.src = ''; // Clear image, maybe show a loading text in a real app
-    qrImage.alt = 'Connecting to WhatsApp Web...';
-  } else if (waStatus === 'disconnected') {
-    qrOverlay.style.display = 'flex';
-    qrImage.src = '';
-    qrImage.alt = 'Starting WhatsApp Web Service...';
+  // 2. Manage QR Overlay (Only block interface if active platform is WhatsApp)
+  if (currentPlatform === 'whatsapp') {
+    if (waStatus === 'qr_ready' && data.qrCode) {
+      qrOverlay.style.display = 'flex';
+      qrImage.src = data.qrCode;
+    } else if (waStatus === 'connecting') {
+      qrOverlay.style.display = 'flex';
+      qrImage.src = ''; // Clear image
+      qrImage.alt = 'Connecting to WhatsApp Web...';
+    } else if (waStatus === 'disconnected') {
+      qrOverlay.style.display = 'flex';
+      qrImage.src = '';
+      qrImage.alt = 'Starting WhatsApp Web Service...';
+    } else {
+      // authenticated or ready
+      qrOverlay.style.display = 'none';
+    }
   } else {
-    // authenticated or ready
+    // Hide WhatsApp QR overlay if browsing Telegram
     qrOverlay.style.display = 'none';
   }
 }
@@ -208,6 +259,10 @@ async function handleLogout() {
       activeChat = null;
       welcomeScreen.style.display = 'flex';
       activeDashboard.style.display = 'none';
+      lastSyncedChats = null;
+      loadedGlobalOnStart = false;
+      loadedTgChatsOnStart = false;
+      tgVerifyStep = false;
       checkStatus();
     }
   } catch (err) {
@@ -221,16 +276,46 @@ async function handleLogout() {
 
 async function fetchChats() {
   try {
-    const res = await fetch('/api/chats');
-    if (!res.ok) throw new Error('Failed to fetch chats');
+    // Show a loading text in the sidebar first
+    groupsList.replaceChildren();
+    const loadingText = document.createElement('p');
+    loadingText.className = 'logo-sub';
+    loadingText.style.paddingLeft = '1rem';
+    loadingText.textContent = 'Loading groups...';
+    groupsList.appendChild(loadingText);
+
+    const res = await fetch(`/api/chats?platform=${currentPlatform}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to fetch chats');
+    }
     
     const data = await res.json();
     if (data.success && data.groups) {
-      lastSyncedChats = data.groups;
+      if (currentPlatform === 'whatsapp') {
+        lastSyncedChats = data.groups;
+      } else if (currentPlatform === 'telegram') {
+        loadedTgChatsOnStart = true;
+      }
       renderGroups(data.groups);
+    } else {
+      throw new Error('Invalid response format');
     }
   } catch (err) {
     console.error('Error loading chats:', err);
+    groupsList.replaceChildren();
+    const errMsg = document.createElement('p');
+    errMsg.className = 'logo-sub';
+    errMsg.style.padding = '0.5rem 1rem';
+    errMsg.style.fontSize = '0.8rem';
+    errMsg.style.color = '#ff4a4a';
+    
+    if (currentPlatform === 'whatsapp' && waStatus !== 'ready') {
+      errMsg.textContent = 'WhatsApp not connected. Scan the QR code to link your account.';
+    } else {
+      errMsg.textContent = err.message || 'Error loading groups. Please try again.';
+    }
+    groupsList.appendChild(errMsg);
   }
 }
 
@@ -240,8 +325,14 @@ function renderGroups(groups) {
   if (groups.length === 0) {
     const emptyMsg = document.createElement('p');
     emptyMsg.className = 'logo-sub';
-    emptyMsg.style.paddingLeft = '1rem';
-    emptyMsg.textContent = 'No groups found.';
+    emptyMsg.style.padding = '0.5rem 1rem';
+    emptyMsg.style.fontSize = '0.8rem';
+    
+    if (currentPlatform === 'telegram') {
+      emptyMsg.textContent = 'No groups or channels found on this account.';
+    } else {
+      emptyMsg.textContent = 'No groups found.';
+    }
     groupsList.appendChild(emptyMsg);
     return;
   }
@@ -331,7 +422,8 @@ async function handleSummarize() {
       body: JSON.stringify({
         chatId: activeChat.id,
         chatName: activeChat.name,
-        days: days
+        days: days,
+        platform: currentPlatform
       })
     });
 
@@ -607,7 +699,7 @@ function renderGlobalDigests(summaries) {
   if (summaries.length === 0) {
     const emptyMsg = document.createElement('p');
     emptyMsg.className = 'logo-sub';
-    emptyMsg.textContent = 'No past digests found. Choose a WhatsApp group to generate your first digest!';
+    emptyMsg.textContent = 'No past digests found. Choose a group from the sidebar to generate your first digest!';
     globalDigestsList.appendChild(emptyMsg);
     return;
   }
@@ -622,7 +714,8 @@ function renderGlobalDigests(summaries) {
     // Format group name
     const groupName = document.createElement('div');
     groupName.className = 'global-digest-group';
-    groupName.textContent = sum.chat_name;
+    const platformEmoji = sum.platform === 'telegram' ? '✈️ ' : '💬 ';
+    groupName.textContent = platformEmoji + sum.chat_name;
 
     // Format generated date
     const date = new Date(sum.created_at * 1000).toLocaleString();
@@ -697,4 +790,172 @@ async function loadGlobalDigestDetails(summaryId) {
     errMsg.textContent = 'Could not load digest details.';
     readerContent.appendChild(errMsg);
   }
+}
+
+// ==========================================
+// TELEGRAM WORKERS & PLATFORM TOGGLING
+// ==========================================
+
+function updateTelegramUI(data) {
+  tgConnectionDot.className = `status-dot ${tgStatus}`;
+  
+  const statusLabels = {
+    disconnected: 'Disconnected',
+    ready: 'Connected'
+  };
+  
+  tgConnectionText.textContent = statusLabels[tgStatus] || 'Disconnected';
+
+  // Manage Telegram Overlay
+  if (currentPlatform === 'telegram') {
+    if (tgStatus !== 'ready') {
+      tgOverlay.style.display = 'flex';
+      if (tgVerifyStep) {
+        tgRequestCodeForm.style.display = 'none';
+        tgVerifyCodeForm.style.display = 'block';
+      } else {
+        tgRequestCodeForm.style.display = 'block';
+        tgVerifyCodeForm.style.display = 'none';
+      }
+    } else {
+      tgOverlay.style.display = 'none';
+    }
+  } else {
+    tgOverlay.style.display = 'none';
+  }
+}
+
+async function handleTgRequestCode(e) {
+  e.preventDefault();
+  tgRequestError.style.display = 'none';
+  tgRequestCodeBtn.disabled = true;
+  tgRequestCodeBtn.textContent = 'Sending Code...';
+
+  const apiId = tgApiIdInput.value.trim();
+  const apiHash = tgApiHashInput.value.trim();
+  const phoneNumber = tgPhoneInput.value.trim();
+
+  try {
+    const res = await fetch('/api/telegram/connect', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({ apiId, apiHash, phoneNumber })
+    });
+
+    const data = await res.json();
+    tgRequestCodeBtn.disabled = false;
+    tgRequestCodeBtn.textContent = 'Request Code';
+
+    if (res.ok && data.success) {
+      tgVerifyStep = true;
+      tgRequestCodeForm.style.display = 'none';
+      tgVerifyCodeForm.style.display = 'block';
+      tgPasswordGroup.style.display = 'none';
+      tgCodeInput.value = '';
+      tgPasswordInput.value = '';
+    } else {
+      tgRequestError.textContent = data.error || 'Failed to request verification code';
+      tgRequestError.style.display = 'block';
+    }
+  } catch (err) {
+    tgRequestCodeBtn.disabled = false;
+    tgRequestCodeBtn.textContent = 'Request Code';
+    tgRequestError.textContent = 'Server communication error';
+    tgRequestError.style.display = 'block';
+  }
+}
+
+async function handleTgVerifyCode(e) {
+  e.preventDefault();
+  tgVerifyError.style.display = 'none';
+  tgVerifyCodeBtn.disabled = true;
+  tgVerifyCodeBtn.textContent = 'Verifying...';
+
+  const phoneCode = tgCodeInput.value.trim();
+  const password = tgPasswordInput.value.trim();
+
+  try {
+    const res = await fetch('/api/telegram/verify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({ phoneCode, password })
+    });
+
+    const data = await res.json();
+    tgVerifyCodeBtn.disabled = false;
+    tgVerifyCodeBtn.textContent = 'Link Telegram';
+
+    if (res.ok) {
+      if (data.success) {
+        tgVerifyStep = false;
+        tgVerifyCodeForm.style.display = 'none';
+        tgRequestCodeForm.style.display = 'block';
+        
+        // Clear inputs
+        tgApiIdInput.value = '';
+        tgApiHashInput.value = '';
+        tgPhoneInput.value = '';
+        tgCodeInput.value = '';
+        tgPasswordInput.value = '';
+        
+        // Refresh status & load groups
+        await checkStatus();
+        fetchChats();
+      } else if (data.requiresPassword) {
+        // Show 2FA password field
+        tgPasswordGroup.style.display = 'block';
+        tgVerifyError.textContent = 'Two-step verification password is required.';
+        tgVerifyError.style.display = 'block';
+      } else {
+        tgVerifyError.textContent = data.error || 'Verification failed';
+        tgVerifyError.style.display = 'block';
+      }
+    } else {
+      tgVerifyError.textContent = data.error || 'Verification failed';
+      tgVerifyError.style.display = 'block';
+    }
+  } catch (err) {
+    tgVerifyCodeBtn.disabled = false;
+    tgVerifyCodeBtn.textContent = 'Link Telegram';
+    tgVerifyError.textContent = 'Server communication error';
+    tgVerifyError.style.display = 'block';
+  }
+}
+
+function handleTgBackToConnect() {
+  tgVerifyStep = false;
+  tgVerifyError.style.display = 'none';
+  tgVerifyCodeForm.style.display = 'none';
+  tgRequestCodeForm.style.display = 'block';
+}
+
+function switchPlatform(platform) {
+  if (currentPlatform === platform) return;
+  currentPlatform = platform;
+  
+  // Update platform tab highlights
+  if (currentPlatform === 'whatsapp') {
+    btnPlatformWA.classList.add('active');
+    btnPlatformTG.classList.remove('active');
+    chatsSectionTitle.textContent = 'WhatsApp Groups';
+  } else {
+    btnPlatformWA.classList.remove('active');
+    btnPlatformTG.classList.add('active');
+    chatsSectionTitle.textContent = 'Telegram Groups';
+  }
+
+  // Refresh lists
+  fetchChats();
+  
+  // If we have open active screen, reset to dashboard since chats switched
+  showDashboard();
+  
+  // Hide QR code overlay if we switched to Telegram and WhatsApp is disconnected
+  checkStatus();
 }
